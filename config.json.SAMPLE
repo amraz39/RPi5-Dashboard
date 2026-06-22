@@ -1,0 +1,34 @@
+{
+  "rpi": {
+    "host": "xxx.xxx.xxx.xxx",
+    "port": 8765,
+    "refresh_seconds": 2
+  },
+
+  "hosts": [
+    { "label": "RPi5 New",  "host": "xxx.xxx.xxx.xxx", "port": 8765 },
+    { "label": "RPi5 Orig",   "host": "xxx.xxx.xxx.xxx", "port": 8765 },
+    { "label": "RPi4 Fake","host": "xxx.xxx.xxx.xxx", "port": 8765 }
+  ],
+
+  "theme": {
+    "mode": "dark_glass",
+    "blur": true
+  },
+
+  "tiles": {
+    "cpu": true,
+    "cpu_temp": true,
+    "ssd_temp": true,
+    "ram": true,
+    "disk": true,
+    "network": true,
+    "docker": true
+  },
+
+  "alerts": {
+    "cpu_temp": 75,
+    "ssd_temp": 75,
+    "ram": 90
+  }
+}

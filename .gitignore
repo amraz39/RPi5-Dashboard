@@ -16,3 +16,4 @@ dist/
 *.txt
 blynk_history_*.csv
 *.service
+config.json
