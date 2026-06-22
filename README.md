@@ -152,15 +152,15 @@ The compiled binary is output to `dist/rpi5_dashboard.exe`. Place `config.json` 
 ```json
 {
   "rpi": {
-    "host": "192.168.3.4",
+    "host": "192.168.99.3",
     "port": 8765,
     "refresh_seconds": 2
   },
 
   "hosts": [
-    { "label": "RPi5 Main",   "host": "192.168.3.4",  "port": 8765 },
-    { "label": "RPi5 Dev",    "host": "192.168.3.5",  "port": 8765 },
-    { "label": "RPi4 Backup", "host": "192.168.3.10", "port": 8765 }
+    { "label": "RPi5 Main",   "host": "192.168.99.11", "port": 8765 },
+    { "label": "RPi5 Dev",    "host": "192.168.99.12", "port": 8765 },
+    { "label": "RPi4 Backup", "host": "192.168.99.13", "port": 8765 }
   ],
 
   "alerts": {
