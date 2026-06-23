@@ -1,7 +1,7 @@
 ############################################################################################################
 # Runs on RPi5
 #
-# v2.0
+# v2.2
 ############################################################################################################
 #
 # Metrics Exporter
@@ -10,18 +10,138 @@
 # python3 -u metrics_exporter.py
 #
 ############################################################################################################
+#
+# PERFORMANCE NOTE
+# ────────────────
+# docker stats --no-stream blocks for ~2s waiting for a CPU measurement interval.
+# Instead, this version runs `docker stats` in STREAMING mode in a background
+# thread, continuously updating a per-container cache. The /metrics endpoint
+# reads from that cache instantly — no subprocess wait per request.
+#
+############################################################################################################
 
 from flask import Flask, jsonify
 import psutil
 import subprocess
+import threading
 import time
 import json
+import re
 
 app = Flask(__name__)
 
 net_prev  = psutil.net_io_counters()
 disk_prev = psutil.disk_io_counters()
 t_prev    = time.time()
+
+
+# ── Docker stats cache ────────────────────────────────────────────────────────
+#
+# _docker_cache      : dict keyed by container name -> latest stats
+# _docker_cache_lock : protects cache from concurrent read/write
+#
+# Updated continuously by _docker_stream_worker() daemon thread.
+# /metrics reads instantly from cache — no subprocess wait.
+
+_docker_cache      = {}   # { name: {...container dict...} }
+_docker_cache_lock = threading.Lock()
+
+# Strip ANSI escape codes
+_ANSI_RE = re.compile(r'\x1b\[[0-9;]*[mABCDEFGHJKSTfhilmnprsu]')
+
+
+def _docker_stream_worker():
+    """
+    Runs docker stats in streaming mode.
+    Each parsed line updates the per-container cache entry immediately.
+    No block-boundary detection needed — every line is self-contained.
+    """
+
+    cmd = [
+        "docker", "stats", "--no-trunc",
+        "--format",
+        '{"name":"{{.Name}}","cpu":"{{.CPUPerc}}",'
+        '"mem_usage":"{{.MemUsage}}","mem_perc":"{{.MemPerc}}",'
+        '"net_io":"{{.NetIO}}","block_io":"{{.BlockIO}}"}'
+    ]
+
+    while True:
+        try:
+            proc = subprocess.Popen(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL,
+                text=True
+            )
+
+            for raw_line in proc.stdout:
+                # Strip ANSI codes and whitespace
+                line = _ANSI_RE.sub("", raw_line).strip()
+
+                if not line or not line.startswith("{"):
+                    continue
+
+                try:
+                    c = json.loads(line)
+
+                    name = c.get("name", "")
+                    if not name:
+                        continue
+
+                    c["cpu"]      = float(c["cpu"].replace("%", "").strip() or 0)
+                    c["mem_perc"] = float(c["mem_perc"].replace("%", "").strip() or 0)
+
+                    parts          = c["mem_usage"].split("/")
+                    c["mem_used"]  = parts[0].strip() if parts else "?"
+                    c["mem_limit"] = parts[1].strip() if len(parts) > 1 else "?"
+                    del c["mem_usage"]
+
+                    c["status"] = "running"
+
+                    with _docker_cache_lock:
+                        _docker_cache[name] = c
+
+                except Exception as ex:
+                    print("Docker stream parse error:", ex, repr(line))
+
+            proc.wait()
+
+        except Exception as e:
+            print("Docker stream worker error:", e)
+
+        # Process died — wait and restart
+        time.sleep(3)
+
+
+def _start_docker_stream():
+    t = threading.Thread(target=_docker_stream_worker, daemon=True)
+    t.start()
+    print("Docker stats stream started")
+
+
+def stopped_containers():
+    """Returns list of stopped/exited container dicts."""
+    try:
+        out = subprocess.check_output(
+            ["docker", "ps", "-a", "--filter", "status=exited",
+             "--format", "{{.Names}}"],
+            text=True, timeout=5
+        )
+        return [
+            {
+                "name":      n,
+                "cpu":       0,
+                "mem_perc":  0,
+                "mem_used":  "—",
+                "mem_limit": "—",
+                "status":    "stopped",
+                "net_io":    "—",
+                "block_io":  "—"
+            }
+            for n in out.strip().splitlines() if n.strip()
+        ]
+    except:
+        return []
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -80,10 +200,9 @@ def throttle_flags():
     """
     try:
         out = subprocess.check_output(["vcgencmd", "get_throttled"]).decode()
-        # output: throttled=0x50000
         val = int(out.strip().split("=")[1], 16)
         return {
-            "raw": hex(val),
+            "raw":                 hex(val),
             "under_voltage_now":   bool(val & (1 << 0)),
             "freq_capped_now":     bool(val & (1 << 1)),
             "throttled_now":       bool(val & (1 << 2)),
@@ -96,66 +215,6 @@ def throttle_flags():
     except Exception as e:
         print("Throttle error:", e)
         return {}
-
-
-def docker_stats():
-    """
-    Returns list of dicts with per-container stats.
-    Uses docker stats --no-stream --format json (Docker >= 25)
-    with fallback to older format.
-    """
-    try:
-        out = subprocess.check_output(
-            [
-                "docker", "stats", "--no-stream",
-                "--format",
-                '{"name":"{{.Name}}","cpu":"{{.CPUPerc}}",'
-                '"mem_usage":"{{.MemUsage}}","mem_perc":"{{.MemPerc}}",'
-                '"status":"running","net_io":"{{.NetIO}}","block_io":"{{.BlockIO}}"}'
-            ],
-            text=True,
-            timeout=10
-        )
-        containers = []
-        for line in out.strip().splitlines():
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                c = json.loads(line)
-                # Strip % signs and parse floats
-                c["cpu"]      = float(c["cpu"].replace("%", "").strip() or 0)
-                c["mem_perc"] = float(c["mem_perc"].replace("%", "").strip() or 0)
-                # Parse mem usage e.g. "123MiB / 7.6GiB"
-                parts = c["mem_usage"].split("/")
-                c["mem_used"] = parts[0].strip() if parts else "?"
-                c["mem_limit"] = parts[1].strip() if len(parts) > 1 else "?"
-                del c["mem_usage"]
-                containers.append(c)
-            except Exception as ex:
-                print("Docker parse error:", ex, line)
-        return containers
-    except Exception as e:
-        print("Docker stats error:", e)
-        return []
-
-
-def stopped_containers():
-    """Returns list of stopped/exited container names."""
-    try:
-        out = subprocess.check_output(
-            ["docker", "ps", "-a", "--filter", "status=exited",
-             "--format", "{{.Names}}"],
-            text=True, timeout=5
-        )
-        return [
-            {"name": n, "cpu": 0, "mem_perc": 0,
-             "mem_used": "—", "mem_limit": "—",
-             "status": "stopped", "net_io": "—", "block_io": "—"}
-            for n in out.strip().splitlines() if n.strip()
-        ]
-    except:
-        return []
 
 
 def format_uptime(seconds):
@@ -178,17 +237,25 @@ def metrics():
     net  = psutil.net_io_counters()
     disk = psutil.disk_io_counters()
 
-    rx = (net.bytes_recv  - net_prev.bytes_recv)  / dt
-    tx = (net.bytes_sent  - net_prev.bytes_sent)  / dt
-    rd = (disk.read_bytes - disk_prev.read_bytes) / dt
-    wr = (disk.write_bytes- disk_prev.write_bytes)/ dt
+    rx = (net.bytes_recv   - net_prev.bytes_recv)   / dt
+    tx = (net.bytes_sent   - net_prev.bytes_sent)   / dt
+    rd = (disk.read_bytes  - disk_prev.read_bytes)  / dt
+    wr = (disk.write_bytes - disk_prev.write_bytes) / dt
 
     net_prev  = net
     disk_prev = disk
     t_prev    = now
 
-    running  = docker_stats()
-    stopped  = stopped_containers()
+    # Read running containers from cache (instant — no subprocess wait)
+    with _docker_cache_lock:
+        running = list(_docker_cache.values())
+
+    stopped        = stopped_containers()
+
+    # Exclude from stopped list any container already in running cache
+    running_names  = {c["name"] for c in running}
+    stopped        = [c for c in stopped if c["name"] not in running_names]
+
     all_containers = running + stopped
 
     return jsonify({
@@ -211,5 +278,9 @@ def metrics():
         "docker":       all_containers,
     })
 
+
+# ── Startup ───────────────────────────────────────────────────────────────────
+
+_start_docker_stream()
 
 app.run(host="0.0.0.0", port=8765)

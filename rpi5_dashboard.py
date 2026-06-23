@@ -1,7 +1,7 @@
 ############################################################################################################
 # Runs on Windows PC
 #
-# v2.0
+# v2.1
 ############################################################################################################
 #
 # RPi5 Dashboard
@@ -413,6 +413,12 @@ class InfoTile(QFrame):
             f"font-size:14px; font-weight:600; color:{color}; background:transparent;"
         )
 
+    def clear(self):
+        self.body.setText("—")
+        self.body.setStyleSheet(
+            "font-size:14px; font-weight:600; color:#334155; background:transparent;"
+        )
+
 
 # ── Docker table ──────────────────────────────────────────────────────────────
 class DockerTable(QFrame):
@@ -487,6 +493,14 @@ class DockerTable(QFrame):
             }
         """)
         lay.addWidget(self.table)
+
+    def clear(self):
+        """Clear all rows and reset counter label."""
+        self.table.setRowCount(0)
+        self.count_lbl.setText("—")
+        row_h = self.table.verticalHeader().defaultSectionSize()
+        hdr_h = self.table.horizontalHeader().height()
+        self.table.setFixedHeight(hdr_h + row_h)
 
     def update_containers(self, containers: list):
         running = [c for c in containers if c.get("status") == "running"]
@@ -781,11 +795,19 @@ class Dashboard(QWidget):
         self.header.set_online(False)
         for tile in self.tiles.values():
             tile.set_offline()
+        self.uptime_tile.clear()
+        self.freq_tile.clear()
+        self.throttle_tile.clear()
+        self.docker_table.clear()
 
     def _on_host_change(self, idx: int):
         self._host_idx = idx
         for tile in self.tiles.values():
             tile.set_offline()
+        self.uptime_tile.clear()
+        self.freq_tile.clear()
+        self.throttle_tile.clear()
+        self.docker_table.clear()
         self._trigger_fetch()
 
 
