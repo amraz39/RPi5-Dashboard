@@ -1,7 +1,7 @@
 ############################################################################################################
 # Runs on RPi5
 #
-# v2.2
+# v2.3
 ############################################################################################################
 #
 # Metrics Exporter
@@ -84,11 +84,23 @@ def _docker_stream_worker():
                 try:
                     c = json.loads(line)
 
-                    name = c.get("name", "")
-                    if not name:
+                    name = c.get("name", "").strip()
+
+                    # Filter out docker stats artifacts:
+                    #   "--"  -- transitional/partial entry emitted between refresh cycles
+                    #   ""    -- empty name, invalid entry
+                    if not name or name == "--":
                         continue
 
-                    c["cpu"]      = float(c["cpu"].replace("%", "").strip() or 0)
+                    # Filter out zero-value ghost entries (all metrics are 0B/0).
+                    # These appear when a container is in a transitional state
+                    # and docker stats emits a placeholder row with no real data.
+                    raw_mem = c.get("mem_usage", "").strip()
+                    raw_cpu = c.get("cpu", "").strip()
+                    if raw_mem in ("0B / 0B", "0B") and raw_cpu in ("0%", "0.00%"):
+                        continue
+
+                    c["cpu"]      = float(raw_cpu.replace("%", "").strip() or 0)
                     c["mem_perc"] = float(c["mem_perc"].replace("%", "").strip() or 0)
 
                     parts          = c["mem_usage"].split("/")
