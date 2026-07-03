@@ -1,7 +1,7 @@
 ############################################################################################################
 # Runs on RPi5
 #
-# v2.3
+# v2.4
 ############################################################################################################
 #
 # Metrics Exporter
@@ -229,6 +229,62 @@ def throttle_flags():
         return {}
 
 
+def wifi_signal():
+    """
+    Reads WiFi signal strength and link quality from /proc/net/wireless.
+
+    /proc/net/wireless columns (after the two header lines):
+      iface | status | link | level | noise | ...
+      link  — link quality count (0–70 on most drivers)
+      level — signal level in dBm (negative value, e.g. -36)
+      noise — noise floor in dBm (-256 means not available on this driver)
+
+    Returns a dict with:
+      interface  — e.g. "wlan0"
+      rssi_dbm   — signal level in dBm  (e.g. -36)
+      quality    — 0–100 % derived from link quality count (link/70 * 100)
+      noise_dbm  — noise floor in dBm (None if driver reports -256 sentinel)
+    or None if no wireless interface is found.
+    """
+    try:
+        with open("/proc/net/wireless") as f:
+            lines = f.readlines()
+
+        # First two lines are headers; data starts at line index 2
+        for line in lines[2:]:
+            parts = line.split()
+            if not parts:
+                continue
+
+            iface = parts[0].rstrip(":")
+
+            # link quality — raw count (0–70 typical); clamp to 100 %
+            link_raw = float(parts[2].rstrip("."))
+            quality  = min(100, int(link_raw / 70.0 * 100))
+
+            # signal level in dBm — already negative on this driver
+            level_raw = float(parts[3].rstrip("."))
+            rssi_dbm  = int(level_raw) if level_raw < 0 else int(level_raw) - 256
+
+            # noise floor — -256 is a driver sentinel meaning "not available"
+            noise_raw = float(parts[4].rstrip("."))
+            noise_dbm = None if noise_raw == -256 else (
+                int(noise_raw) if noise_raw < 0 else int(noise_raw) - 256
+            )
+
+            return {
+                "interface": iface,
+                "rssi_dbm":  rssi_dbm,
+                "quality":   quality,
+                "noise_dbm": noise_dbm,
+            }
+
+    except Exception as e:
+        print("WiFi signal error:", e)
+
+    return None
+
+
 def format_uptime(seconds):
     seconds = int(seconds)
     days    = seconds // 86400
@@ -287,6 +343,7 @@ def metrics():
         # ── Extended ──────────────────────────────────────
         "uptime":       format_uptime(time.time() - psutil.boot_time()),
         "throttle":     throttle_flags(),
+        "wifi":         wifi_signal(),
         "docker":       all_containers,
     })
 

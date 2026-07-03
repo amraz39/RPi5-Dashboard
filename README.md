@@ -15,6 +15,7 @@ A real-time system monitoring dashboard for Raspberry Pi 5 (and compatible SBCs)
 - **Sparkline history graphs** — 60-second rolling window per metric
 - **Docker container table** — running/stopped status, CPU %, memory %, net I/O, block I/O
 - **System info strip** — uptime, CPU frequency, throttle/undervoltage flags
+- **WiFi signal strength** — 4-bar indicator with dBm and quality %
 - **Multi-host support** — switch between multiple Pis via a dropdown
 - **Threshold alerts** — configurable warn/danger levels per metric in `config.json`
 - **Non-blocking UI** — all HTTP fetches run in background threads; the UI never freezes
@@ -226,7 +227,12 @@ Example response:
       "net_io": "1.2MB / 800kB",
       "block_io": "50MB / 12MB"
     }
-  ]
+  ],
+  "wifi": {
+    "quality": 75,
+    "rssi_dbm": -36,
+    "interface": "wlan0"
+  }
 }
 ```
 

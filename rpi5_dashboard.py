@@ -1,7 +1,7 @@
 ############################################################################################################
 # Runs on Windows PC
 #
-# v2.1
+# v2.3
 ############################################################################################################
 #
 # RPi5 Dashboard
@@ -76,6 +76,7 @@ ICONS = {
     "disk_write":"⬆",
     "net_rx":    "↓",
     "net_tx":    "↑",
+    "wifi":      "📶",
 }
 
 
@@ -420,7 +421,146 @@ class InfoTile(QFrame):
         )
 
 
-# ── Docker table ──────────────────────────────────────────────────────────────
+# ── WiFi signal bars widget ───────────────────────────────────────────────────
+class WifiBars(QWidget):
+    """
+    Draws 4 signal-strength bars like a phone WiFi indicator.
+    Active bars are coloured based on quality; inactive bars are dark gray.
+    Bar heights increase left to right (25%, 50%, 75%, 100% of max height).
+    quality: 0–100, or None to show all bars gray (no signal / offline).
+    """
+    BAR_COUNT  = 4
+    BAR_WIDTH  = 10
+    BAR_GAP    = 5
+    MAX_HEIGHT = 36
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._quality = None   # None = offline/unknown
+        total_w = self.BAR_COUNT * self.BAR_WIDTH + (self.BAR_COUNT - 1) * self.BAR_GAP
+        self.setFixedSize(total_w, self.MAX_HEIGHT)
+        self.setAttribute(Qt.WA_TranslucentBackground)
+
+    def set_quality(self, quality):
+        """quality: 0–100 int, or None for offline."""
+        self._quality = quality
+        self.update()
+
+    def _bar_color(self, quality):
+        """Active bar colour based on quality %."""
+        if quality >= 75: return QColor("#22c55e")   # green  — excellent
+        if quality >= 50: return QColor("#22d3ee")   # cyan   — good
+        if quality >= 25: return QColor("#f59e0b")   # amber  — fair
+        return QColor("#ef4444")                     # red    — poor
+
+    def paintEvent(self, _):
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing)
+
+        q          = self._quality           # None or 0–100
+        offline    = q is None
+        active_col = QColor("#334155") if offline else self._bar_color(q)
+        dim_col    = QColor("#1e2a3a")       # inactive bar colour
+
+        # How many bars to light up (0 if offline)
+        if offline or q == 0:
+            lit = 0
+        elif q <= 25:
+            lit = 1
+        elif q <= 50:
+            lit = 2
+        elif q <= 75:
+            lit = 3
+        else:
+            lit = 4
+
+        for i in range(self.BAR_COUNT):
+            frac   = (i + 1) / self.BAR_COUNT          # 0.25, 0.5, 0.75, 1.0
+            bh     = int(self.MAX_HEIGHT * frac)
+            bx     = i * (self.BAR_WIDTH + self.BAR_GAP)
+            by     = self.MAX_HEIGHT - bh
+            color  = active_col if i < lit else dim_col
+            p.setBrush(QBrush(color))
+            p.setPen(Qt.NoPen)
+            p.drawRoundedRect(bx, by, self.BAR_WIDTH, bh, 3, 3)
+
+
+# ── WiFi tile ─────────────────────────────────────────────────────────────────
+class WifiTile(QFrame):
+    """
+    SYSTEM INFO tile showing WiFi signal strength as 4 painted bars
+    plus dBm and quality % text below.
+    """
+    def __init__(self):
+        super().__init__()
+        self.setObjectName("infotile")
+        self.setStyleSheet("""
+            QFrame#infotile {
+                background:#111827;
+                border:1px solid #1e2a3a;
+                border-radius:16px;
+            }
+        """)
+        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        self.setFixedHeight(90)
+
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(14, 10, 14, 8)
+        lay.setSpacing(4)
+
+        # Header row
+        hdr = QHBoxLayout()
+        ilbl = QLabel("📶")
+        ilbl.setStyleSheet("font-size:15px; color:#38bdf8; background:transparent;")
+        hdr.addWidget(ilbl)
+        tlbl = QLabel("WIFI")
+        tlbl.setStyleSheet(
+            "font-size:9px; letter-spacing:2px; color:#64748b; "
+            "font-weight:600; background:transparent;"
+        )
+        hdr.addWidget(tlbl)
+        hdr.addStretch()
+        lay.addLayout(hdr)
+
+        # Bars + text row
+        body = QHBoxLayout()
+        body.setSpacing(10)
+
+        self.bars = WifiBars()
+        body.addWidget(self.bars, alignment=Qt.AlignVCenter)
+
+        self.info_lbl = QLabel("—")
+        self.info_lbl.setStyleSheet(
+            "font-size:12px; font-weight:600; color:#334155; background:transparent;"
+        )
+        body.addWidget(self.info_lbl, 1)
+        lay.addLayout(body)
+
+    def update_wifi(self, quality, rssi_dbm, iface):
+        """
+        quality  : 0–100 int
+        rssi_dbm : signal level in dBm (e.g. -36)
+        iface    : interface name (e.g. "wlan0")
+        """
+        self.bars.set_quality(quality)
+
+        if quality >= 75:   col = "#22c55e"
+        elif quality >= 50: col = "#22d3ee"
+        elif quality >= 25: col = "#f59e0b"
+        else:               col = "#ef4444"
+
+        self.info_lbl.setText(f"{rssi_dbm} dBm\n{quality}%  {iface}")
+        self.info_lbl.setStyleSheet(
+            f"font-size:12px; font-weight:600; color:{col}; background:transparent;"
+        )
+
+    def clear(self):
+        """Called on offline / host change — show all bars gray."""
+        self.bars.set_quality(None)
+        self.info_lbl.setText("—")
+        self.info_lbl.setStyleSheet(
+            "font-size:12px; font-weight:600; color:#334155; background:transparent;"
+        )
 class DockerTable(QFrame):
     def __init__(self):
         super().__init__()
@@ -698,9 +838,11 @@ class Dashboard(QWidget):
         self.uptime_tile   = InfoTile("Uptime",   "⏱")
         self.freq_tile     = InfoTile("CPU Freq", "⚡")
         self.throttle_tile = InfoTile("Throttle", "⚠")
+        self.wifi_tile     = WifiTile()
         info_row.addWidget(self.uptime_tile)
         info_row.addWidget(self.freq_tile)
         info_row.addWidget(self.throttle_tile)
+        info_row.addWidget(self.wifi_tile)
         root.addLayout(info_row)
 
         root.addWidget(section_label("DISK & NETWORK I/O"))
@@ -789,6 +931,16 @@ class Dashboard(QWidget):
             else:
                 self.throttle_tile.set_text("✓ All clear", color="#22c55e")
 
+        # WiFi signal strength and quality
+        wifi = d.get("wifi")
+        if wifi:
+            rssi    = wifi.get("rssi_dbm", 0)
+            quality = wifi.get("quality",  0)
+            iface   = wifi.get("interface", "wlan")
+            self.wifi_tile.update_wifi(quality, rssi, iface)
+        else:
+            self.wifi_tile.clear()
+
         self.docker_table.update_containers(d.get("docker", []))
 
     def _on_fail(self):
@@ -798,6 +950,7 @@ class Dashboard(QWidget):
         self.uptime_tile.clear()
         self.freq_tile.clear()
         self.throttle_tile.clear()
+        self.wifi_tile.clear()
         self.docker_table.clear()
 
     def _on_host_change(self, idx: int):
@@ -807,6 +960,7 @@ class Dashboard(QWidget):
         self.uptime_tile.clear()
         self.freq_tile.clear()
         self.throttle_tile.clear()
+        self.wifi_tile.clear()
         self.docker_table.clear()
         self._trigger_fetch()
 
