@@ -346,11 +346,21 @@ class MetricCard(QFrame):
     def update_value(self, raw: float):
         txt = f"{raw:.1f}" if self.unit in {"%", "°C"} else f"{raw:.2f}"
         self.val_lbl.setText(txt)
-        if self.warn and self.danger:
-            col = "#ef4444" if raw >= self.danger else "#f59e0b" if raw >= self.warn else "#f1f5f9"
-            self.val_lbl.setStyleSheet(
-                f"font-size:26px; font-weight:700; color:{col}; background:transparent;"
+
+        if self.warn is not None and self.danger is not None:
+            col = (
+                "#ef4444" if raw >= self.danger
+                else "#f59e0b" if raw >= self.warn
+                else "#f1f5f9"
             )
+        else:
+            # Always white for cards with no alert thresholds
+            col = "#f1f5f9"
+
+        self.val_lbl.setStyleSheet(
+            f"font-size:26px; font-weight:700; color:{col}; background:transparent;"
+        )
+
         if self.gauge:
             self.gauge.set_value(raw)
         self.spark.push(raw)
@@ -820,7 +830,7 @@ class Dashboard(QWidget):
         sys_grid.setSpacing(10)
         self.tiles: dict[str, MetricCard] = {}
         system_tiles = [
-            ("CPU Usage", "cpu",       "%",   None,               None,                  100.0),
+            ("CPU Usage", "cpu",       "%",   70,                  90,                   100.0),
             ("CPU Temp",  "cpu_temp",  "°C",  ALERTS["cpu_temp"], ALERTS["cpu_temp"]+10, 100.0),
             ("SSD Temp",  "ssd_temp",  "°C",  ALERTS["ssd_temp"], ALERTS["ssd_temp"]+10, 100.0),
             ("RAM",       "ram",       "%",   ALERTS["ram"],       95,                   100.0),
