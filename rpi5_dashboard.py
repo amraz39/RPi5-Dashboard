@@ -1,7 +1,7 @@
 ############################################################################################################
 # Runs on Windows PC
 #
-# v2.3
+# v2.4
 ############################################################################################################
 #
 # RPi5 Dashboard
@@ -829,6 +829,7 @@ class Dashboard(QWidget):
         sys_grid = QGridLayout()
         sys_grid.setSpacing(10)
         self.tiles: dict[str, MetricCard] = {}
+        #   ("CPU Usage", "cpu",       "%",   None,               None,                  100.0),
         system_tiles = [
             ("CPU Usage", "cpu",       "%",   70,                  90,                   100.0),
             ("CPU Temp",  "cpu_temp",  "°C",  ALERTS["cpu_temp"], ALERTS["cpu_temp"]+10, 100.0),

@@ -105,6 +105,62 @@ journalctl -u metrics_exporter -f
 
 ---
 
+### 2.5 — Update the python code
+
+Stop current exporter (old version):
+```bash
+sudo systemctl stop metrics_exporter.service
+```
+
+Verify:
+```bash
+systemctl status metrics_exporter.service --no-pager
+```
+
+It should be seen:
+```bash
+Active: inactive (dead)
+```
+
+Also verify the process is gone:
+```bash
+ps aux | grep '[m]etrics_exporter.py'
+```
+There should be no output.
+
+Then, backup current version and copy new version of [`metrics_exporter.py`] to `/home/****/rpi-dashboard`.
+
+For test, start it manually from RPi5 terminal:
+```bash
+cd /home/****/rpi-dashboard
+python3 -u metrics_exporter.py
+```
+
+One should get:
+```bash
+Running on http://0.0.0.0:8765
+```
+
+In PC terminal, type:
+```bash
+curl http://192.168.3.4:8765/metrics
+```
+
+One will see response similar to:
+```bash
+{"cpu":5.4,"cpu_cores":[4.3,5.2,7.8,3.4],"cpu_freq_mhz":1600,"cpu_temp":57.6,"disk_read":0.0,"disk_used":14.0,"disk_write":0.02,"docker":[],"net_rx":0.0,"net_tx":0.0,"ram":55.4,"ssd_temp":44,"throttle":{"freq_capped_ever":false,"freq_capped_now":false,"raw":"0x0","soft_temp_limit_ever":false,"soft_temp_limit_now":false,"throttled_ever":false,"throttled_now":false,"under_voltage_ever":false,"under_voltage_now":false},"uptime":{"days":7,"hours":22,"minutes":52,"total_seconds":687178},"wifi":{"interface":"wlan0","noise_dbm":null,"quality":100,"rssi_dbm":-35}...}
+```
+
+Stop it by hitting [`CTRL`] + [`C`] from RPi5 terminal
+
+Then start the systemd-managed instance:
+```bash
+sudo systemctl start metrics_exporter.service
+```
+
+
+---
+
 ### 3 — Desktop Dashboard (Windows/Linux/macOS)
 
 ```bash

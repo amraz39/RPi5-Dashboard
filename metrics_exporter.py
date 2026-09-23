@@ -1,7 +1,7 @@
 ############################################################################################################
 # Runs on RPi5
 #
-# v2.4
+# v2.6
 ############################################################################################################
 #
 # Metrics Exporter
@@ -131,29 +131,85 @@ def _start_docker_stream():
     print("Docker stats stream started")
 
 
-def stopped_containers():
-    """Returns list of stopped/exited container dicts."""
+def docker_container_states():
+    """
+    Returns the CURRENT Docker state for every container.
+
+    docker stats is intentionally used only for live resource statistics.
+    It is NOT authoritative for container existence/state because the stats
+    stream can stop reporting a container while its last cached entry remains.
+
+    Returns:
+        dict: {container_name: docker_state}
+              docker_state is normally one of:
+              running, exited, created, paused, restarting, dead
+        None: if the Docker query itself fails.
+    """
     try:
         out = subprocess.check_output(
-            ["docker", "ps", "-a", "--filter", "status=exited",
-             "--format", "{{.Names}}"],
-            text=True, timeout=5
+            [
+                "docker", "ps", "-a",
+                "--format", "{{.Names}}\t{{.State}}"
+            ],
+            text=True,
+            timeout=5
         )
-        return [
-            {
-                "name":      n,
-                "cpu":       0,
-                "mem_perc":  0,
-                "mem_used":  "—",
-                "mem_limit": "—",
-                "status":    "stopped",
-                "net_io":    "—",
-                "block_io":  "—"
-            }
-            for n in out.strip().splitlines() if n.strip()
-        ]
-    except:
+
+        states = {}
+        for line in out.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+
+            parts = line.split("\t", 1)
+            if len(parts) != 2:
+                continue
+
+            name, state = parts
+            name = name.strip()
+            state = state.strip().lower()
+
+            if name:
+                states[name] = state
+
+        return states
+
+    except Exception as e:
+        print("Docker state query error:", e)
+        return None
+
+
+def stopped_containers(states=None):
+    """
+    Returns containers that currently exist but are not running.
+
+    The Docker state query is authoritative. This prevents a stale entry
+    left in _docker_cache by docker stats from being reported as running.
+    """
+    if states is None:
+        states = docker_container_states()
+
+    if states is None:
         return []
+
+    stopped = []
+
+    for name, state in states.items():
+        if state == "running":
+            continue
+
+        stopped.append({
+            "name":      name,
+            "cpu":       0,
+            "mem_perc":  0,
+            "mem_used":  "—",
+            "mem_limit": "—",
+            "status":    "stopped",
+            "net_io":    "—",
+            "block_io":  "—"
+        })
+
+    return stopped
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -314,15 +370,35 @@ def metrics():
     disk_prev = disk
     t_prev    = now
 
-    # Read running containers from cache (instant — no subprocess wait)
+    # Docker stats provides resource values, but its stream/cache is NOT
+    # authoritative for whether a container is still running.
+    #
+    # Always reconcile the cache against Docker's current container state.
+    # This is what prevents a stopped/disabled container from remaining
+    # falsely marked as "running" because its last stats entry is cached.
+    states = docker_container_states()
+
     with _docker_cache_lock:
-        running = list(_docker_cache.values())
+        if states is None:
+            # Docker state could not be queried. Do not trust stale cached
+            # "running" entries, because that could falsely report containers
+            # as online.
+            running = []
+            stopped = []
+        else:
+            # Remove every cached container that is no longer running.
+            for name in list(_docker_cache):
+                if states.get(name) != "running":
+                    del _docker_cache[name]
 
-    stopped        = stopped_containers()
+            # Only containers that Docker currently reports as running may
+            # come from the docker stats cache.
+            running = [
+                c for c in _docker_cache.values()
+                if states.get(c.get("name")) == "running"
+            ]
 
-    # Exclude from stopped list any container already in running cache
-    running_names  = {c["name"] for c in running}
-    stopped        = [c for c in stopped if c["name"] not in running_names]
+            stopped = stopped_containers(states)
 
     all_containers = running + stopped
 
